@@ -1,0 +1,204 @@
+#!/bin/sh
+
+#
+# This "tool" handles repostories with the following structure:
+# - trunk/ --> "stage area" (pre-production)
+# - tags/  --> "production area" (one directory for each macro-release)
+# - branches/ --> "testing/developing area" (one directory for each test/developer)
+#
+# Every time you commit some change to trunk/ or tags/... it will generate:
+# - backup package with previuos version of all the files changed
+# - release package with only file/directories changed
+# and after that it will upload the files to the webserver (*):
+# - the "trunk" will be propagated to the pre-production server
+# - the "last tag" will be propagated to the production server
+# 
+# (*) your svn server must have access to the web server (pre-production and production)
+# using a ssh connection which can be estalished using only username, hostname and
+# a cryptographic key already configured (using ssh-copy-id or similar procedures)
+#
+
+#
+# ATTENTION
+# all the following code expect you to not use spaces in files/directories names
+#
+
+#
+# POST-COMMIT HOOK
+#
+# The post-commit hook is invoked after a commit.  Subversion runs
+# this hook by invoking a program (script, executable, binary, etc.)
+# named 'post-commit' (for which this file is a template) with the 
+# following ordered arguments:
+#
+#   [1] REPOS-PATH   (the path to this repository)
+#   [2] REV          (the number of the revision just committed)
+#
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:/opt/bin:/opt/sbin
+export PATH
+
+#
+# define a "line" for every repository that should be "auto published"
+#
+# SSHOPT_<reponame> = "<user@stage_hostname> <stage_directory> <user@production_host> <production_directory>"
+#
+SSHOPT_demo="ftp@stage.server.com /var/www/vhosts_stage/demo ftp@www.server.com /var/www/vhosts/demo"
+SSHOPT_proj="ftp@stage.server.com /var/www/vhosts_stage/proj ftp@www.server.com /var/www/vhosts/proj"
+SSHOP_noprod="ftp@stage.server.com /var/www/vhosts_stage/noprod"
+SSHOP_other=""
+
+REPOS="$1"
+REV="$2"
+
+if [ "$REPOS" = "" ]; then
+	echo "No repo given"
+    exit 1
+fi
+
+if [ "$REV" = "" ]; then
+	echo "No revision given"
+    exit 2
+fi
+
+# previous release
+OLD=$(($REV-1))
+
+# current directory
+STARTDIR=$(pwd)
+
+# go to a defined directory
+cd $REPOS
+
+# get the name of the repository
+BASE=$(basename $REPOS)
+
+# define the directory that will store auto-generated releases/backups
+DIR=/mnt/share/svn-automation/${BASE}/$(date +%Y%m%d-%H%M%S)
+
+# get the ssh configuration for the current repository
+S1=SSHOPT_
+SSH=${S1}${BASE}
+SSH=${!SSH}
+
+# get all the changes applied in the given revision
+ALLCHANGES=$(svnlook changed . -r $REV|sed -es/\ /:space:/g)
+
+# create a directory that will store the changed files extracted from the repository
+mkdir -p ${DIR}/repo
+
+# analyze every single change committed to the repository ...
+for SINGLECHANGE in $ALLCHANGES;
+do
+	# parse the information given by svn 
+    SINGLECHANGE=$(echo $SINGLECHANGE|sed -es/:space:/\ /g)
+    # and extract the operation performed
+    OP=$(echo $SINGLECHANGE|awk '{print $1}')
+    # and the file/directory changed
+    F=$(echo $SINGLECHANGE|awk '{print $2}')
+    # if the file path begins with "t" (t=trunk|tags) go on checking what to do
+    if [ "$(echo $F|grep ^t)" != "" ]; then
+		# initialize an empty "prefix"
+		PREF=""
+		# if the file path begins with trunk set a "prefix" that will tell us
+		# we are working on a file to be uploaded to the pre-prodution server
+		if [ "$(echo $F|grep ^trunk)" != "" ]; then
+			PREF=stage
+		fi
+		# if the file path begins with tags set a "prefix" that will tell us
+		# we are working on a file to be uploaded to the prodution server
+		if [ "$(echo $F|grep ^tags)" != "" ]; then
+			PREF=prod
+		fi
+		# if we have set a prefix go on and work on the file
+		if [ "$PREF" != "" ]; then
+			# get the directory name
+			DIRF=$(dirname $F)
+			# create a directory to store the file/directory changed
+			mkdir -p ${DIR}/repo/${DIRF}
+			# create a directory to store the previuos version of the file/directory changed
+			mkdir -p ${DIR}/old/${DIRF}
+			# export the files from the repository to the filesystem
+			svn export -r $REV -q --force file://${REPOS}/${F} ${DIR}/repo/${DIRF} 2>/dev/null
+			svn export -r $OLD -q --force file://${REPOS}/${F} ${DIR}/old/${DIRF} 2>/dev/null
+			# create a directory for the "release package" in which store the file/directory changed
+    	    mkdir -p ${DIR}/release/${PREF}/${DIRF}
+    	    # create a directory for the "backup package" in which store the previous release of the file/directory changed
+    	    mkdir -p ${DIR}/backup/${PREF}/${DIRF}
+    	    # copy the old file to the backup package
+    	    cp ${DIR}/old/${F} ${DIR}/backup/${PREF}/${F} 2>/dev/null
+    	    # if the operation executed on the file during the commit is not a "delete" copy the file to the "release package"
+    	    if [ "$OP" != "D" ]; then
+				cp ${DIR}/repo/${F} ${DIR}/release/${PREF}/${F}
+    	    fi
+    	    # if the operation executed on the file during the commit is a "delete" we can create a "clean-xxxxx.sh" file
+    	    # which will contain every deletion that should be made on the webserver (is up to the user to execute these files!)
+    	    if [ "$OP" = "D" ]; then
+				# in we are working on a "pre-production" file the real filename we have to strip one directory level
+				if [ "$PREF" = "stage" ]; then
+					F=`dirname $(dirname $F)`/`basename $F`
+				fi
+				# in we are working on a "production" file the real filename we have to strip one directory level
+				if [ "$PREF" = "prod" ]; then
+					 F=`dirname $(dirname $(dirname $F))`/`basename $F`
+				fi
+				# put the delete command in the file to execute on the server
+				echo "rm -f $F " >> ${DIR}/release/${PREF}/clean-$(date +%s).sh
+    	    fi
+        fi
+    fi
+done
+
+# cleanup now unused directories
+rm -rf $DIR/repo 2>/dev/null >/dev/null
+rm -rf $DIR/old  2>/dev/null >/dev/null
+
+# set permissions to enable everyone who has access to the shared location
+# to read/modify files and directories this script has created
+chmod 777 $(dirname $DIR)
+chmod 777 ${DIR}
+for i in $(find ${DIR} -type d); do chmod 777 $i; done
+for i in $(find ${DIR} -type f); do chmod 666 $i; done
+
+# if there is some ssh configuration use it to upload file to the webserver
+if [ "$SSH" != "" ]; then
+
+	# enter in the directory containing the pre-production release package
+    cd ${DIR}/release/stage/trunk/ 2>/dev/null >/dev/null
+    # if the directory exists go on in the process
+    if [ "$?" = "0" ]; then
+		# get the user+host information
+        SSHCON=$(echo $SSH|awk '{print $1}')
+        # get the directory to upload to
+		SSHDIR=$(echo $SSH|awk '{print $2}')
+		# if there are connection info do the upload
+		if [ "$SSHCON" != "" ]; then
+            scp -q -r * ${SSHCON}:${SSHDIR}
+            scp -q ../clean* ${SSHCON}:${SSHDIR}
+        fi
+    fi
+    cd - 2>/dev/null >/dev/null
+    
+    # enter in the directory containing the production release package
+    cd ${DIR}/release/prod/tags/* 2>/dev/null >/dev/null
+    # if the directory exists go on in the process
+    if [ "$?" = "0" ]; then
+		# get the user+host information
+        SSHCON=$(echo $SSH|awk '{print $3}')
+        # get the directory to upload to
+		SSHDIR=$(echo $SSH|awk '{print $4}')
+		# if there are connection info do the upload
+		if [ "$SSHCON" != "" ]; then
+            scp -q -r * ${SSHCON}:${SSHDIR}
+            scp -q ../../clean* ${SSHCON}:${SSHDIR}
+        fi
+    fi
+    cd - 2>/dev/null >/dev/null
+    
+fi
+
+# go back to the initial directory
+cd $STARTDIR 2>/dev/null >/dev/null
+
+# everyhing done
+exit 0
