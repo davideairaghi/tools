@@ -30,16 +30,17 @@ do
     OK=""
 
 	DATEDIR=$(date +%Y-%m-%d)
-    GDRIVEDIR=$( gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' " 2>/dev/null| grep ${GDRIVECONT} | head -n 1 | awk '{print $1}')
+    GDRIVEDIR=$( gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' and name ='${GDRIVECONT}' " 2>/dev/null| grep ${GDRIVECONT} | head -n 1 | awk '{print $1}')
     GDRIVEUPL=""
 
     if [ "${GDRIVEDIR}" != "" ]; then
 
-        GDRIVEUPL=$(gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' and '${GDRIVEDIR}' in parents "  2>/dev/null| grep $DATEDIR | head -n 1 | awk '{print $1}')
+        GDRIVEUPL=$(gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' and '${GDRIVEDIR}' in parents and name ='${DATEDIR}"  2>/dev/null| grep $DATEDIR | head -n 1 | awk '{print $1}')
     
         if [ "${GDRIVEUPL}" = "" ]; then
 			gdrive --config ${GDRIVECONF} mkdir --parent ${GDRIVEDIR} ${DATEDIR} &>/dev/null
-			GDRIVEUPL=$(gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' and '${GDRIVEDIR}' in parents " 2>/dev/null| grep $DATEDIR | head -n 1 | awk '{print $1}')
+			sleep 5
+			GDRIVEUPL=$(gdrive --config ${GDRIVECONF} list --query "mimeType contains 'folder' and '${GDRIVEDIR}' in parents and name ='${DATEDIR}" 2>/dev/null| grep $DATEDIR | head -n 1 | awk '{print $1}')
         fi
 
     fi
