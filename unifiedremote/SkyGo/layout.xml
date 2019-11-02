@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<layout >
+<!-- layout onLaunch="launch" onVolumeUp="volup" onVolumeDown="voldown" color="red" -->
+  <grid>
+    <row>
+      <button icon="flash" onTap="launch" />
+	  <button icon="power" onTap="close" />
+    </row>
+	<row>
+	  <button icon="play" onTap="playmovie" />
+	  <button icon="playpause" onTap="playpause" />
+	  <button icon="stop" onTap="stop" />
+	</row>
+  </grid>
+</layout>
